@@ -83,7 +83,7 @@ jobs:
           # Add all provided binpacks here
           # Example:
           wget -O binpacks/fishpack32.binpack \
-            https://raw.githubusercontent.com/official-stockfish/master-binpacks/fishpack32.binpack
+            https://huggingface.co/datasets/official-stockfish/master-binpacks/resolve/main/fishpack32.binpack?download=true
 
       - name: Build official trainer
         run: |
