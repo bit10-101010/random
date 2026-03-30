@@ -19,7 +19,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v3
         with:
-          submodules: true
+          submodules: false   # <-- fixed
 
       - name: Install system deps
         run: |
@@ -39,14 +39,14 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          submodules: true
+          submodules: false  # <-- fixed
 
       - name: Build reference Stockfish
         run: |
           git clone https://github.com/official-stockfish/Stockfish.git sf_ref
           cd sf_ref
           git checkout d173a0655d04b95497eefb75b400baa3eff56f93
-          make -j profile-build
+          make -j build ARCH=x86-64   # <-- fixed
 
       - name: Build testing Stockfish (fastchess)
         run: |
@@ -68,22 +68,18 @@ jobs:
   train_nnue:
     needs: setup
     runs-on: ubuntu-22.04
-
     steps:
       - uses: actions/checkout@v3
         with:
-          submodules: true
+          submodules: false  # <-- fixed
 
       - name: Create output directory
-        run: mkdir -p output
+        run: mkdir -p output binpacks
 
-      - name: Download binpacks
+      - name: Download fishpack32.binpack
         run: |
-          mkdir -p binpacks
-          # Add all provided binpacks here
-          # Example:
           wget -O binpacks/fishpack32.binpack \
-            https://huggingface.co/datasets/official-stockfish/master-binpacks/resolve/main/fishpack32.binpack?download=true
+            "https://huggingface.co/datasets/official-stockfish/master-binpacks/resolve/main/fishpack32.binpack?download=true"
 
       - name: Build official trainer
         run: |
@@ -92,7 +88,7 @@ jobs:
           git checkout 6a448afa7b75809b4e12cf6e2b259fac8230b22d
           make -j build-trainer
 
-      - name: Stage 1 Convert (checkpoint2nnue + optimize)
+      - name: Stage 1 Convert
         run: |
           ./trainer/trainer \
             --binpack binpacks/fishpack32.binpack \
@@ -129,7 +125,6 @@ jobs:
 
       - name: Stage 3 repeats
         run: |
-          # Example repeated training sequence
           ./trainer/trainer --resume output/stage1.nnue \
             --binpacks binpacks/*.binpack \
             --lr 0.0010783148702050778 \
