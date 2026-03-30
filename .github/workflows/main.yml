@@ -1,0 +1,145 @@
+name: Stockfish NNUE Training & Testing
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "**.yaml"
+      - "**.yml"
+      - "training/**"
+      - "testing/**"
+
+jobs:
+  setup:
+    runs-on: ubuntu-22.04
+    outputs:
+      python-cache: ${{ steps.cache-python.outputs.cache-hit }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: Install system deps
+        run: |
+          sudo apt update
+          sudo apt install -y cmake g++ ninja-build python3 python3-pip git wget zstd
+
+      - name: Cache Python
+        id: cache-python
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip
+
+  test_engine:
+    needs: setup
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: Build reference Stockfish
+        run: |
+          git clone https://github.com/official-stockfish/Stockfish.git sf_ref
+          cd sf_ref
+          git checkout d173a0655d04b95497eefb75b400baa3eff56f93
+          make -j profile-build
+
+      - name: Build testing Stockfish (fastchess)
+        run: |
+          git clone https://github.com/Disservin/fastchess.git fastchess
+          cd fastchess
+          git checkout adc3d025006f2efe7e014cde7dc46970f3bb7252
+          make -j
+
+      - name: Run FastChess SPRT test
+        run: |
+          ./fastchess/fastchess \
+            --engine1 sf_ref/stockfish \
+            --engine2 sf_ref/stockfish \
+            --sprt elo0=-0.75 elo1=2 \
+            --rounds 80000 \
+            --tc 10+0.1 \
+            --hash 16
+
+  train_nnue:
+    needs: setup
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - name: Create output directory
+        run: mkdir -p output
+
+      - name: Download binpacks
+        run: |
+          mkdir -p binpacks
+          # Add all provided binpacks here
+          # Example:
+          wget -O binpacks/fishpack32.binpack \
+            https://raw.githubusercontent.com/official-stockfish/master-binpacks/fishpack32.binpack
+
+      - name: Build official trainer
+        run: |
+          git clone https://github.com/official-stockfish/Stockfish.git trainer
+          cd trainer
+          git checkout 6a448afa7b75809b4e12cf6e2b259fac8230b22d
+          make -j build-trainer
+
+      - name: Stage 1 Convert (checkpoint2nnue + optimize)
+        run: |
+          ./trainer/trainer \
+            --binpack binpacks/fishpack32.binpack \
+            --features Full_Threats+HalfKAv2_hm^ \
+            --l1 1024 \
+            --l2 31 \
+            --ft_compression leb128 \
+            --ft_optimize_count 100000 \
+            --ft_optimize \
+            --output output/converted.nnue
+
+      - name: Stage 2 Run training
+        run: |
+          ./trainer/trainer \
+            --train \
+            --binpacks binpacks/*.binpack \
+            --epochs 800 \
+            --batch-size 65536 \
+            --features Full_Threats+HalfKAv2_hm^ \
+            --l1 1024 \
+            --l2 31 \
+            --lr 4.375e-4 \
+            --gamma 0.995 \
+            --start-lambda 1.0 \
+            --end-lambda 0.75 \
+            --random-fen-skipping 10 \
+            --early-fen-skipping 12 \
+            --pc-y1 0.6893201149773951 \
+            --pc-y2 2.9285769485515805 \
+            --pc-y3 1.4386005301749225 \
+            --w1 3.3553547771220007 \
+            --w2 0.7006821612968052 \
+            --output output/stage1.nnue
+
+      - name: Stage 3 repeats
+        run: |
+          # Example repeated training sequence
+          ./trainer/trainer --resume output/stage1.nnue \
+            --binpacks binpacks/*.binpack \
+            --lr 0.0010783148702050778 \
+            --gamma 0.994446435229841 \
+            --start-lambda 0.8460635942002347 \
+            --end-lambda 0.7490913625693039 \
+            --output output/stage2.nnue
+
+      - name: Commit outputs into repo
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "Add trained NNUE output"
+          file_pattern: output/*.nnue
